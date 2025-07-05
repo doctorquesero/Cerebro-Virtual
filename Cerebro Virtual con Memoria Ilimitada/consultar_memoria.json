@@ -1,0 +1,423 @@
+{
+  "name": "consultar_memoria",
+  "nodes": [
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "consultar-memoria",
+        "options": {}
+      },
+      "name": "N2.1-Webhook Recibir Consulta",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 1,
+      "position": [
+        0,
+        0
+      ],
+      "id": "f3fdec7b-d2c7-4247-ad6f-0b9be9b0678c",
+      "webhookId": "e8390fe1-c7f7-43a1-8306-706908a438b9"
+    },
+    {
+      "parameters": {
+        "authentication": "headerAuth",
+        "requestMethod": "POST",
+        "url": "https://api.openai.com/v1/embeddings",
+        "jsonParameters": true,
+        "options": {},
+        "bodyParametersJson": "={\n  \"model\": \"text-embedding-3-small\",\n  \"input\": \"{{$json['query']}}\"\n}\n"
+      },
+      "name": "N2.2-Generar Embedding",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 1,
+      "position": [
+        520,
+        0
+      ],
+      "id": "9840d286-57e6-40f2-9eaa-1b47975d6453",
+      "credentials": {
+        "httpHeaderAuth": {
+          "id": "facX2t6aQkbIIgdh",
+          "name": "OpenAI API Key para Cerebro Virtual"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "DO $$\nBEGIN\n    BEGIN\n        -- Intentar insertar solo si no existe\n        INSERT INTO public.learned_facts (summary, source_log_id, embedding, confidence, create_at, embedding_vector)\n        SELECT\n            '{{ $json[\"query\"] }}',\n            'auto',\n            'embedding-{{ $now }}',\n            1.0,\n            NOW(),\n            to_json('{{ $json[\"data\"][0][\"embedding\"] }}')::json\n        WHERE NOT EXISTS (\n            SELECT 1 FROM public.learned_facts WHERE summary = '{{ $json[\"query\"] }}'\n        );\n\n        -- Buscar contexto semántico y devolver JSON\n        PERFORM json_build_object(\n            'status', 'success',\n            'data', (\n                SELECT json_agg(row_to_json(t))\n                FROM (\n                    SELECT\n                        summary,\n                        embedding,\n                        confidence,\n                        create_at,\n                        1 - (embedding_vector <=> to_json('{{ $json[\"data\"][0][\"embedding\"] }}')::json)::vector AS similarity\n                    FROM\n                        public.learned_facts\n                    ORDER BY\n                        similarity DESC\n                    LIMIT 5\n                ) t\n            ),\n            'error', NULL\n        );\n\n    EXCEPTION WHEN OTHERS THEN\n        -- Captura error y devuelve JSON con status error\n        PERFORM json_build_object(\n            'status', 'error',\n            'data', NULL,\n            'error', SQLERRM\n        );\n    END;\nEND $$;",
+        "additionalFields": {}
+      },
+      "name": "N2.3-Buscar Contexto Semántico",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 1,
+      "position": [
+        740,
+        0
+      ],
+      "id": "3751a5f2-5833-4206-a46b-79b947511322",
+      "alwaysOutputData": true,
+      "executeOnce": false,
+      "retryOnFail": true,
+      "waitBetweenTries": 2000,
+      "credentials": {
+        "postgres": {
+          "id": "e6TJbFUYsKPSMqvg",
+          "name": "Postgres Cerebro Virtual"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "assignments": {
+          "assignments": [
+            {
+              "id": "6106cde2-6963-401b-ae4e-942a483575a8",
+              "name": "prompt",
+              "value": "=Eres un asistente inteligente con memoria histórica y contexto amplio. Utiliza la siguiente información relevante que tienes almacenada para responder con precisión y coherencia.\n\nContexto relevante:\n{{ $json.context }}\n\nPregunta del usuario:\n{{ $json.query }}\n\nResponde con detalle, corrigiendo errores y complementando con la información disponible.\n",
+              "type": "string"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 3.4,
+      "position": [
+        1380,
+        20
+      ],
+      "id": "dc4732bb-c079-449a-a0ed-4b96082fa275",
+      "name": "N2.4-Construir Prompt para ChatGPT1"
+    },
+    {
+      "parameters": {
+        "requestMethod": "POST",
+        "url": "https://api.openai.com/v1/chat/completions",
+        "options": {},
+        "bodyParametersUi": {
+          "parameter": [
+            {
+              "name": "model",
+              "value": "gpt-4o-mini"
+            },
+            {
+              "name": "messages",
+              "value": "=[{\"role\":\"system\",\"content\":\"Eres un asistente con memoria y contexto histórico.\"},{\"role\":\"user\",\"content\":$json.prompt}]"
+            }
+          ]
+        },
+        "headerParametersUi": {
+          "parameter": [
+            {
+              "name": "Authorization",
+              "value": "=| Name          | Value                                                                                                                                          |\n| ------------- | ---------------------------------------------------------------------------------------------------------------------------------------------- |\n| Authorization | `Bearer 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` |\n"
+            }
+          ]
+        }
+      },
+      "name": "N2.5-Consultar ChatGPT",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 1,
+      "position": [
+        1540,
+        20
+      ],
+      "id": "f2294ddb-8b04-49db-98e7-6854c94d3039"
+    },
+    {
+      "parameters": {
+        "options": {
+          "responseCode": 200
+        }
+      },
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.3,
+      "position": [
+        1740,
+        20
+      ],
+      "id": "0ae96a69-4991-499c-8d5a-e17f5a17abfc",
+      "name": "Respond to Webhook"
+    },
+    {
+      "parameters": {
+        "jsCode": "// verificar que existe el campo 'body' en el JSON de entrada\nconst rawBody = $json.body;\nif (!rawBody) {\n  throw new Error(\"No se encontró el campo 'body' en el JSON de entrada\");\n}\n\n// Limpiar saltos de línea, tabs y retornos que pueden romper el JSON\nconst cleanedBody = JSON.stringify(rawBody).replace(/[\\n\\r\\t]+/g, '');\n\n// Parsear el JSON limpio\nlet parsedBody;\ntry {\n  parsedBody = JSON.parse(cleanedBody);\n} catch (error) {\n  throw new Error(\"Error al parsear JSON en body: \" + error.message);\n}\n\n// Retornar el query para el siguiente nodo, en formato correcto para n8n\nreturn [\n  {\n    json: {\n      query: parsedBody.query\n    }\n  }\n];"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        220,
+        0
+      ],
+      "id": "cbad10e9-f8e5-45e1-b12d-5fa57b7cb2e4",
+      "name": "N2.15- Parsear Query para Embedding"
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "=https://api.openai.com/v1/completions",
+        "authentication": "predefinedCredentialType",
+        "nodeCredentialType": "openAiApi",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "=Content-Type",
+              "value": "=application/json\n\n"
+            }
+          ]
+        },
+        "sendBody": true,
+        "bodyParameters": {
+          "parameters": [
+            {
+              "name": "=model",
+              "value": "=code-davinci-002"
+            },
+            {
+              "name": "=prompt",
+              "value": "=Corrige el siguiente SQL si tiene errores. Devuelve solo el SQL corregido, sin explicaciones, listo para ejecución en PostgreSQL:\n\n{{ $json[\"query\"] }}\n"
+            },
+            {
+              "name": "=max_tokens",
+              "value": "500"
+            },
+            {
+              "name": "=temperature",
+              "value": "0"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        1140,
+        -200
+      ],
+      "id": "11cc352c-04a3-41fc-ac43-9384bf6b92b7",
+      "name": "Codex Corregir SQL",
+      "credentials": {
+        "openAiApi": {
+          "id": "B9Xr6mOEb3e0qQbg",
+          "name": "OpenAI Doctor Quesero"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict",
+            "version": 2
+          },
+          "conditions": [
+            {
+              "id": "6dff016e-651f-44b7-85db-d1e841703d20",
+              "leftValue": "={{$json[\"status\"]}}",
+              "rightValue": "=error",
+              "operator": {
+                "type": "string",
+                "operation": "equals",
+                "name": "filter.operator.equals"
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [
+        960,
+        0
+      ],
+      "id": "c5dca889-bfd5-4dea-96fa-dc995bcfe97b",
+      "name": "N2.3.5-Verificar Error SQL"
+    },
+    {
+      "parameters": {
+        "assignments": {
+          "assignments": [
+            {
+              "id": "575d7045-b18d-4c8c-99c0-ac2e90e78b52",
+              "name": "query",
+              "value": "={{ \n  $json?.choices?.[0]?.text \n    ? $json.choices[0].text.trim() \n    : ($json?.text ? $json.text.trim() : 'SELECT 1;') \n}}\n",
+              "type": "string"
+            },
+            {
+              "id": "b80ca830-bdf1-4385-991b-4c0b6417fb72",
+              "name": "",
+              "value": "",
+              "type": "string"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 3.4,
+      "position": [
+        1360,
+        -200
+      ],
+      "id": "69760f81-23e4-4862-adbf-c661c222a4c0",
+      "name": "N2.3.1-Preparar Query Corregido",
+      "retryOnFail": true,
+      "maxTries": 5
+    }
+  ],
+  "pinData": {
+    "N2.1-Webhook Recibir Consulta": [
+      {
+        "json": {
+          "name": "First item",
+          "code": 1
+        }
+      },
+      {
+        "json": {
+          "name": "Second item",
+          "code": 2
+        }
+      }
+    ],
+    "Codex Corregir SQL": [
+      {
+        "json": {
+          "name": "First item",
+          "code": 1
+        }
+      },
+      {
+        "json": {
+          "name": "Second item",
+          "code": 2
+        }
+      }
+    ]
+  },
+  "connections": {
+    "N2.1-Webhook Recibir Consulta": {
+      "main": [
+        [
+          {
+            "node": "N2.15- Parsear Query para Embedding",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "N2.2-Generar Embedding": {
+      "main": [
+        [
+          {
+            "node": "N2.3-Buscar Contexto Semántico",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "N2.3-Buscar Contexto Semántico": {
+      "main": [
+        [
+          {
+            "node": "N2.3.5-Verificar Error SQL",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "N2.4-Construir Prompt para ChatGPT1": {
+      "main": [
+        [
+          {
+            "node": "N2.5-Consultar ChatGPT",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "N2.5-Consultar ChatGPT": {
+      "main": [
+        [
+          {
+            "node": "Respond to Webhook",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "N2.15- Parsear Query para Embedding": {
+      "main": [
+        [
+          {
+            "node": "N2.2-Generar Embedding",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "N2.3.5-Verificar Error SQL": {
+      "main": [
+        [
+          {
+            "node": "Codex Corregir SQL",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "N2.4-Construir Prompt para ChatGPT1",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Codex Corregir SQL": {
+      "main": [
+        [
+          {
+            "node": "N2.3.1-Preparar Query Corregido",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "N2.3.1-Preparar Query Corregido": {
+      "main": [
+        [
+          {
+            "node": "N2.3-Buscar Contexto Semántico",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "active": true,
+  "settings": {
+    "executionOrder": "v1"
+  },
+  "versionId": "d7b06111-9182-4ccf-ba3c-7a2655d64a9f",
+  "meta": {
+    "templateCredsSetupCompleted": true,
+    "instanceId": "85802ae111f66e319cc88de6c5e5d3e21c2ef31804c98a4c6f943fd6bba9ff36"
+  },
+  "id": "WAr9LJ8c37RxFuZG",
+  "tags": []
+}
